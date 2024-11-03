@@ -15,6 +15,8 @@ export default {
   },
   ipfs: {
     repo: process.env.IPFS_REPO || './ipfs',
+    swarmPort: process.env.IPFS_SWARM_PORT || 4002,
+    apiPort: process.env.IPFS_API_PORT || 5001,
     start: true,
     EXPERIMENTAL: {
       pubsub: true
@@ -22,7 +24,7 @@ export default {
   },
   orbitdb: {
     directory: process.env.ORBITDB_DIR || './orbitdb',
-    dbName: process.env.ORBITDB_NAME || 'service.events'
-  }
+    dbName: process.env.ORBITDB_NAME || 'eventlog'
+  } 
 };
 
