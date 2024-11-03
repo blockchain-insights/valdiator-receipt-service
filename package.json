@@ -4,6 +4,7 @@
     "type": "module",
     "scripts": {
       "start": "node src/app.js",
+      "migrate": "node src/migrations/run.js",
       "dev": "nodemon src/app.js",
       "test": "jest",
       "lint": "eslint src/",
