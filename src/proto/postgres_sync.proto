@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package postgres_sync;
+
+service PostgresSyncService {
+  // Sync management
+  rpc GetSyncStatus (SyncStatusRequest) returns (SyncStatusResponse) {}
+  rpc TriggerSync (TriggerSyncRequest) returns (TriggerSyncResponse) {}
+  rpc PauseSyncing (PauseSyncRequest) returns (PauseSyncResponse) {}
+  rpc ResumeSyncing (ResumeSyncRequest) returns (ResumeSyncResponse) {}
+  
+  // Batch management
+  rpc GetBatchStatus (BatchStatusRequest) returns (BatchStatusResponse) {}
+  rpc RetryBatch (RetryBatchRequest) returns (RetryBatchResponse) {}
+  
+  // Metrics
+  rpc GetSyncMetrics (SyncMetricsRequest) returns (SyncMetricsResponse) {}
+  rpc StreamSyncMetrics (StreamMetricsRequest) returns (stream SyncMetricsUpdate) {}
+}
+
+message SyncStatusRequest {}
+
+message SyncStatusResponse {
+  SyncState state = 1;
+  int64 last_synced_timestamp = 2;
+  int32 pending_events = 3;
+  string current_batch_id = 4;
+  repeated string error_messages = 5;
+  
+  enum SyncState {
+    UNKNOWN = 0;
+    RUNNING = 1;
+    PAUSED = 2;
+    ERROR = 3;
+    IDLE = 4;
+  }
+}
+
+message TriggerSyncRequest {
+  bool force = 1;
+}
+
+message TriggerSyncResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message PauseSyncRequest {
+  bool wait_for_batch = 1;
+}
+
+message PauseSyncResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ResumeSyncRequest {}
+
+message ResumeSyncResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message BatchStatusRequest {
+  string batch_id = 1;
+}
+
+message BatchStatusResponse {
+  string batch_id = 1;
+  BatchState state = 2;
+  int32 total_events = 3;
+  int32 processed_events = 4;
+  int32 failed_events = 5;
+  repeated string failed_event_ids = 6;
+  int64 start_timestamp = 7;
+  int64 end_timestamp = 8;
+  
+  enum BatchState {
+    UNKNOWN = 0;
+    IN_PROGRESS = 1;
+    COMPLETED = 2;
+    FAILED = 3;
+    PARTIALLY_COMPLETED = 4;
+  }
+}
+
+message RetryBatchRequest {
+  string batch_id = 1;
+  repeated string event_ids = 2;
+}
+
+message RetryBatchResponse {
+  bool accepted = 1;
+  string new_batch_id = 2;
+  string message = 3;
+}
+
+message SyncMetricsRequest {
+  int64 from_timestamp = 1;
+  int64 to_timestamp = 2;
+  repeated string metric_names = 3;
+}
+
+message SyncMetricsResponse {
+  repeated MetricData metrics = 1;
+}
+
+message StreamMetricsRequest {
+  repeated string metric_names = 1;
+  int32 interval_seconds = 2;
+}
+
+message SyncMetricsUpdate {
+  int64 timestamp = 1;
+  map<string, double> metrics = 2;
+  BatchMetrics current_batch = 3;
+}
+
+message MetricData {
+  string name = 1;
+  repeated DataPoint points = 2;
+}
+
+message DataPoint {
+  int64 timestamp = 1;
+  double value = 2;
+  map<string, string> labels = 3;
+}
+
+message BatchMetrics {
+  string batch_id = 1;
+  int32 total_events = 2;
+  int32 processed_events = 3;
+  int32 failed_events = 4;
+  double avg_processing_time = 5;
+  int32 retry_count = 6;
+}

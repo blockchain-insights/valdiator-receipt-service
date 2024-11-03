@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package eventlog;
+
+service EventLogService {
+  // Event management
+  rpc AddEvent (Event) returns (EventResponse) {}
+  rpc GetEvents (EventQuery) returns (stream Event) {}
+  rpc GetEventById (EventId) returns (Event) {}
+  
+  // Batch operations
+  rpc AddEventBatch (EventBatch) returns (BatchResponse) {}
+  
+  // Metrics and monitoring
+  rpc GetMetrics (MetricsQuery) returns (MetricsResponse) {}
+  rpc StreamMetrics (MetricsStreamRequest) returns (stream MetricsUpdate) {}
+  
+  // Health checking
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
+}
+
+// Event messages
+message Event {
+  string id = 1;
+  bytes data = 2;
+  int64 timestamp = 3;
+  map<string, string> metadata = 4;
+}
+
+message EventBatch {
+  repeated Event events = 1;
+  string batch_id = 2;
+}
+
+message EventResponse {
+  string id = 1;
+  bool success = 2;
+  string error = 3;
+  int64 timestamp = 4;
+}
+
+message BatchResponse {
+  string batch_id = 1;
+  bool success = 2;
+  int32 processed_count = 3;
+  repeated string failed_ids = 4;
+  string error = 5;
+}
+
+message EventId {
+  string id = 1;
+}
+
+message EventQuery {
+  int32 limit = 1;
+  string start_after = 2;
+  int64 from_timestamp = 3;
+  int64 to_timestamp = 4;
+  map<string, string> filter_metadata = 5;
+}
+
+// Metrics messages
+message MetricsQuery {
+  int64 from_timestamp = 1;
+  int64 to_timestamp = 2;
+  repeated string metric_names = 3;
+}
+
+message MetricsResponse {
+  repeated MetricData metrics = 1;
+}
+
+message MetricData {
+  string name = 1;
+  repeated DataPoint points = 2;
+}
+
+message DataPoint {
+  int64 timestamp = 1;
+  double value = 2;
+  map<string, string> labels = 3;
+}
+
+message MetricsStreamRequest {
+  repeated string metric_names = 1;
+  int32 interval_seconds = 2;
+}
+
+message MetricsUpdate {
+  int64 timestamp = 1;
+  map<string, double> metrics = 2;
+  SyncStatus sync_status = 3;
+}
+
+// Health check messages
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+}
+
+// Status enums and messages
+enum SyncStatus {
+  UNKNOWN = 0;
+  SYNCED = 1;
+  SYNCING = 2;
+  ERROR = 3;
+}

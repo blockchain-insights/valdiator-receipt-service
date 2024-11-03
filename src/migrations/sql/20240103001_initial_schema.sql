@@ -1,0 +1,32 @@
+CREATE TABLE IF NOT EXISTS ${POSTGRES_SCHEMA}.migrations (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  executed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ${POSTGRES_SCHEMA}.events (
+  id TEXT PRIMARY KEY,
+  data JSONB NOT NULL,
+  timestamp BIGINT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  retry_count INTEGER DEFAULT 0,
+  status VARCHAR(50) DEFAULT 'synced',
+  batch_id UUID
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON ${POSTGRES_SCHEMA}.events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_status ON ${POSTGRES_SCHEMA}.events(status);
+CREATE INDEX IF NOT EXISTS idx_events_batch_id ON ${POSTGRES_SCHEMA}.events(batch_id);
+
+CREATE TABLE IF NOT EXISTS ${POSTGRES_SCHEMA}.event_sync_metrics (
+  id SERIAL PRIMARY KEY,
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  total_events BIGINT NOT NULL,
+  synced_events BIGINT NOT NULL,
+  failed_events BIGINT NOT NULL,
+  retry_count BIGINT NOT NULL,
+  avg_sync_time DOUBLE PRECISION,
+  batch_size INTEGER,
+  last_synced_hash TEXT
+);
