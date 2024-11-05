@@ -10,9 +10,7 @@ import { fileURLToPath } from 'url';
 import winston from 'winston';
 import dotenv from 'dotenv';
 import { createRequire } from 'module';
-import {verifyIdentity} from "./identity/polkadot-identity-provider.js";
-import {base58btc} from "multiformats/bases/base58";
-
+import Identities from "orbit-db-identity-provider";
 
 const require = createRequire(import.meta.url);
 const Keystore = require('orbit-db-keystore');
@@ -38,6 +36,49 @@ const logger = winston.createLogger({
     })
   ]
 });
+
+async function createIdentity (keyPair) {
+  await cryptoWaitReady()
+  const keyring = new Keyring({ type: 'sr25519' })
+  const polkaKeys = keyring.addPair(keyPair)
+
+  const id = polkaKeys.address
+  const keystore = new Keystore()
+  const key = await keystore.getKey(id) || await keystore.createKey(id)
+
+  const idSignature = await keystore.sign(key, id)
+  const polkaSignature = polkaKeys.sign(idSignature)
+
+  const identity = await Identities.createIdentity({
+    type: 'Polkadot', id, keystore, polkaSignature, polkaKeys
+  })
+
+  return identity
+}
+
+const { signatureVerify } = require('@polkadot/util-crypto')
+class PolkadotIdentityProvider {
+  constructor (options) {
+    this.id = options.id
+    this.polkaKeys = options.polkaKeys
+    this.idSignature = options.idSignature
+  }
+
+  getId () { return this.id }
+
+  async signIdentity (_, options) {
+    return options.polkaSignature
+  }
+
+  static get type () { return 'Polkadot' }
+
+  static async verifyIdentity (identity) {
+    const { id, signatures } = identity
+    const { isValid } = signatureVerify(signatures.id, signatures.publicKey, id)
+    return isValid
+  }
+}
+Identities.addIdentityProvider(PolkadotIdentityProvider)
 
 class PolkadotAccessController {
   constructor (orbitdb, idProvider, options) {
@@ -79,6 +120,9 @@ class PolkadotAccessController {
     return { address: cid.toString(base58btc) }
   }
 }
+//const AccessControllers = require('orbit-db-access-controllers')
+//AccessControllers.addAccessController({ AccessController: PolkadotAccessController })
+
 
 class OrbitDBInitializer {
   constructor(privateKey) {
@@ -142,14 +186,10 @@ class OrbitDBInitializer {
       throw new Error('Failed to initialize keystore');
     }
 
-    /*const identity = await Identities.createIdentity({
-      keyPair: this.adminKey,
-      keystore: keystore,
-      type: 'polkadot',
-    });*/
-    identity = null
+    const identity = await createIdentity(this.adminKey)
     const options = {
       directory: orbitdbDir,
+      //AccessControllers: PolkadotAccessController,
       identity,
     };
 
@@ -217,10 +257,6 @@ const main = async () => {
   const privateKey = process.argv[2] || process.env.ADMIN_PRIVATE_KEY;
   
   try {
-
-    const identity = await createIdentity(privateKey)
-    const verifyIdentity = await PolkadotIdentityProvider.verifyIdentity(identity)
-
     const initializer = new OrbitDBInitializer(privateKey);
     const dbAddress = await initializer.initialize();
     
