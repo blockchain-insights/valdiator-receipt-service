@@ -1,50 +1,74 @@
-import { Keyring } from '@polkadot/keyring';
 import {cryptoWaitReady, mnemonicGenerate, mnemonicToMiniSecret} from '@polkadot/util-crypto';
-import OrbitDBInitializer, {logger} from "./init_ipfs.js";
+import {logger, OwnerDatabaseInitializer} from "./init_ipfs.js";
 import {fileURLToPath} from "url";
 import {u8aToHex} from "@polkadot/util";
-import {waitForClientReady} from "@grpc/grpc-js";
+
+
+async function initialize_database(privateKey, ports){
+    try{
+        logger.info('\nInitializing database instance...');
+        const instance = new OrbitDBInitializer(privateKey, ports);
+        const address = await instance.initialize();
+        logger.info('Subnet initialized at:', address);
+
+        return { instance, address }
+    }
+    catch(err){
+        logger.error(err);
+    }
+}
 
 
 async function testUnauthorizedAccess() {
-    let adminInitializer = null;
-    let unauthorizedInitializer = null;
+    let subnetOwnedInstance = null;
+    let validatorOwnedInstance = null;
 
     try {
-        // Initialize admin instance with first set of ports
-        logger.info('\n1. Initializing admin instance...');
-        adminInitializer = new OrbitDBInitializer(process.env.ADMIN_PRIVATE_KEY, {
+
+        const { subnetInstance, address } = await initialize_database(process.env.ADMIN_PRIVATE_KEY,{
+            swarm: 4002,
+            api: 5002,
+            gateway: 9090
+        });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        const {validatorInstance, _ } = await initialize_database(u8aToHex(mnemonicToMiniSecret(mnemonicGenerate())).slice(2),{
+            swarm: 4102,
+            api: 5102,
+            gateway: 9190
+        });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+
+
+        logger.info('\n1. Initializing subnet owned instance...');
+
+        subnetOwnedInstance = new OrbitDBInitializer(process.env.ADMIN_PRIVATE_KEY, {
             swarm: 4002,
             api: 5002,
             gateway: 9090
         });
 
-        const dbAddress = await adminInitializer.initialize();
-        logger.info('Admin database initialized at:', dbAddress);
-
-        // Wait for IPFS to be ready
+        const dbAddress = await subnetOwnedInstance.initialize();
+        logger.info('Subnet database initialized at:', dbAddress);
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // Create unauthorized instance with completely different ports
-        logger.info('\n2. Creating unauthorized instance...');
+
+
+        logger.info('\n2. Creating validator owned instance...');
         const mnemonic = mnemonicGenerate();
         const unauthorizedSeed = mnemonicToMiniSecret(mnemonic);
         const unauthorizedPrivateKey = u8aToHex(unauthorizedSeed).slice(2);
-
-        // Use completely different port ranges
-        unauthorizedInitializer = new OrbitDBInitializer(unauthorizedPrivateKey, {
-            swarm: 4102,  // Changed from 4003 to 4102
-            api: 5102,    // Changed from 5003 to 5102
-            gateway: 9190  // Changed from 9091 to 9190
+        validatorOwnedInstance = new OrbitDBInitializer(unauthorizedPrivateKey, {
+            swarm: 4102,
+            api: 5102,
+            gateway: 9190
         });
+        await validatorOwnedInstance.initialize(dbAddress);
 
-        // Initialize unauthorized instance
-        await unauthorizedInitializer.initialize(dbAddress);
-
-        // Try write access
-        logger.info('\n3. Testing write access...');
+        logger.info('\n3. Testing validator owned instance write access (should fail)...');
         try {
-            await unauthorizedInitializer.eventlog.add({
+            await validatorOwnedInstance.eventlog.add({
                 test: 'unauthorized write attempt',
                 timestamp: Date.now()
             });
@@ -54,21 +78,70 @@ async function testUnauthorizedAccess() {
             logger.info('Access control is working as expected - unauthorized write was blocked');
         }
 
+        subnetOwnedInstance.eventlog.close();
+        logger.info('\n4. Granting write permissions to validator owned instance...');
+
+        const dbOptions = {
+            accessController: {
+                type: 'ipfs',
+                write: [
+                    subnetOwnedInstance.orbitdb.identity.id,
+                    validatorOwnedInstance.orbitdb.identity.id
+                ]
+            }
+        };
+
+        subnetOwnedInstance.eventlog = await subnetOwnedInstance.orbitdb.eventlog('eventlog', dbOptions);
+        //const newDbAddress = subnetOwnedInstance.eventlog.address.toString();   address should be the same !!
+        await subnetOwnedInstance.eventlog.load();
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
+        //logger.info('New database created with address:', newDbAddress);
+        // Wait for changes to propagate
+
+
+        validatorOwnedInstance.eventlog.close();
+        validatorOwnedInstance.eventlog = await validatorOwnedInstance.orbitdb.eventlog(dbAddress);
+        await validatorOwnedInstance.eventlog.load();
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
+        logger.info('\n5. Testing write access again (should succeed)...');
+        try {
+            const hash = await validatorOwnedInstance.eventlog.add({
+                test: 'authorized write attempt',
+                timestamp: Date.now()
+            });
+            logger.info('Write succeeded as expected! Entry hash:', hash);
+
+            // Verify the entry exists
+            const entries = await validatorOwnedInstance.eventlog.iterator({ limit: 1 }).collect();
+            logger.info('Latest entry:', entries[0].payload.value);
+        } catch (error) {
+            logger.error('Write failed unexpectedly:', error);
+            logger.error('Error details:', error);
+        }
+
     } catch (error) {
         logger.error('Test failed:', error);
         throw error;
     } finally {
         // Cleanup
-        logger.info('\n4. Cleaning up...');
-        if (unauthorizedInitializer) await unauthorizedInitializer.close();
-        if (adminInitializer) await adminInitializer.close();
+        logger.info('\n6. Cleaning up...');
+        if (validatorOwnedInstance) await validatorOwnedInstance.close();
+        if (subnetOwnedInstance) await subnetOwnedInstance.close();
     }
 }
 
 const main = async () => {
     try {
         await cryptoWaitReady()
-        await testUnauthorizedAccess();
+
+        const instance = new OwnerDatabaseInitializer(process.env.ADMIN_PRIVATE_KEY);
+        const address = await instance.initialize();
+        logger.info("Address:" , address);
+
+
+
         logger.info('\nTest completed successfully');
     } catch (error) {
         logger.error('Test failed:', error);

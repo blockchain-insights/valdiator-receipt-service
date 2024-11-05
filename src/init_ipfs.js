@@ -63,78 +63,67 @@ async function createIdentity(keyPair, keystoreDir) {  // Add keystoreDir parame
 
 const { signatureVerify } = require('@polkadot/util-crypto')
 class PolkadotIdentityProvider {
-  constructor (options) {
-    this.id = options.id
-    this.polkaKeys = options.polkaKeys
-    this.idSignature = options.idSignature
+  constructor(options) {
+    this.id = options.id;
+    this.polkaKeys = options.polkaKeys;
+    this.idSignature = options.idSignature;
+    this.publicKey = u8aToHex(options.polkaKeys.publicKey);
   }
 
-  getId () { return this.id }
-
-  async signIdentity (_, options) {
-    return options.polkaSignature
+  getId() {
+    return this.id;
   }
 
-  static get type () { return 'Polkadot' }
+  async signIdentity(data) {
+    const signature = this.polkaKeys.sign(data);
+    return u8aToHex(signature);
+  }
 
-  static async verifyIdentity (identity) {
-    const { id, signatures } = identity
-    const { isValid } = signatureVerify(signatures.id, signatures.publicKey, id)
-    return isValid
+  static get type() {
+    return 'Polkadot';
+  }
+
+  static async verifyIdentity(identity) {
+    try {
+      const { id, signatures } = identity;
+
+      // If any required field is missing, return false instead of throwing
+      if (!signatures || !signatures.id || !id) {
+        logger.warn('Missing required identity fields for verification');
+        return false;
+      }
+
+      // Ensure we have proper hex format
+      const publicKey = signatures.publicKey.startsWith('0x') ?
+          signatures.publicKey :
+          `0x${signatures.publicKey}`;
+
+      const signature = signatures.id.startsWith('0x') ?
+          signatures.id :
+          `0x${signatures.id}`;
+
+      const { isValid } = signatureVerify(
+          signature,
+          publicKey,
+          id
+      );
+
+      return isValid;
+    } catch (error) {
+      // Log error but don't throw
+      logger.warn('Identity verification failed:', error.message);
+      return false;
+    }
   }
 }
 Identities.addIdentityProvider(PolkadotIdentityProvider)
 
-class PolkadotAccessController {
-  constructor (orbitdb, idProvider, options) {
-    this._orbitdb = orbitdb
-    this._options = options || {}
-    this.idProvider = idProvider
-  }
-
-  static get type () { return 'Polkadot' }
-
-  get type () {
-    return this.constructor.type
-  }
-
-  async canAppend (entry, identityProvider) {
-    const orbitIdentity = this._orbitdb.identity
-    const entryIdentity = entry.identity
-    const verified = await verifyIdentity(entryIdentity)
-
-    if (!verified) return false
-    if (orbitIdentity.id !== entryIdentity.id) return false
-    if (this._options.write.indexOf(orbitIdentity.id) === -1) return false
-    if (!(await identityProvider._keystore.hasKey(entryIdentity.id))) return false
-
-    return true
-  }
-
-  static async create (orbitdb, options) {
-    return new PolkadotAccessController(orbitdb, {}, options)
-  }
-
-  async load (address) {
-    const manifest = await this._orbitdb._ipfs.dag.get(address)
-    return manifest.value
-  }
-
-  async save () {
-    const cid = await this._orbitdb._ipfs.dag.put(this._options)
-    return { address: cid.toString(base58btc) }
-  }
-}
-//const AccessControllers = require('orbit-db-access-controllers')
-//AccessControllers.addAccessController({ AccessController: PolkadotAccessController })
-
-
-class OrbitDBInitializer {
+class GuestDatabaseInitializer{
   constructor(privateKey, ports = {}) {
     this.ipfs = null;
     this.orbitdb = null;
     this.eventlog = null;
-    this.privateKey = privateKey || process.env.ADMIN_PRIVATE_KEY;
+    this.privateKey = privateKey;
     this.ports = {
       swarm: ports.swarm || 4002,
       api: ports.api || 5002,
@@ -153,17 +142,45 @@ class OrbitDBInitializer {
     }
 
     this.seed = hexToU8a('0x' + this.privateKey);
-    // Don't initialize keyring or adminKey in constructor
+  }
+}
+
+export class OwnerDatabaseInitializer {
+  constructor(privateKey,
+              ports = {
+                  swarm: 4002,
+                  api: 5002,
+                  gateway: 9090
+                },
+              options = {
+                accessController: {
+                  type: 'ipfs',
+                  write: [this.orbitdb.identity.id]
+                }
+              }) {
+
+    this.ipfs = null;
+    this.orbitdb = null;
+    this.eventlog = null;
+    this.privateKey = privateKey.replace('0x', '');
+    this.databaseAddress = null;
+    this.ports = ports
+    this.options = options
+
+    if (this.privateKey.length > 64) {
+      logger.info('Converting extended key to 32-byte seed...');
+      this.privateKey = blake2AsHex(this.privateKey).slice(2);
+    }
+
+    this.seed = hexToU8a('0x' + this.privateKey);
   }
 
-  async initialize(existingDbAddress = null) {
+  async initialize() {
     try {
       await cryptoWaitReady();
-      // Initialize keyring after cryptoWaitReady
       this.keyring = new Keyring({ type: 'sr25519' });
       this.adminKey = this.keyring.addFromSeed(this.seed);
 
-      // Set up instance-specific directories after we have the address
       const baseDir = path.join(process.cwd(), 'data', this.adminKey.address);
       this.directories = {
         ipfs: path.join(baseDir, 'ipfs'),
@@ -171,7 +188,6 @@ class OrbitDBInitializer {
         keystore: path.join(baseDir, 'keystore')
       };
 
-      // Create all directories
       for (const dir of Object.values(this.directories)) {
         await fs.mkdir(dir, { recursive: true });
       }
@@ -180,8 +196,10 @@ class OrbitDBInitializer {
       logger.info(`Admin public key: ${u8aToHex(this.adminKey.publicKey)}`);
 
       await this.initializeIPFS();
-      await this.initializeOrbitDB(existingDbAddress);
-      return this.eventlog?.address.toString();
+      await this.initializeOrbitDB(this.databaseAddress);
+
+      this.databaseAddress = this.eventlog?.address.toString();
+      return this.databaseAddress
     } catch (error) {
       logger.error('Failed to initialize OrbitDB:', error);
       throw error;
@@ -216,12 +234,10 @@ class OrbitDBInitializer {
     logger.info(`IPFS node started with ID: ${id.id}`);
   }
 
-  async initializeOrbitDB(existingDbAddress = null) {
+  async initializeOrbitDB() {
     logger.info('Initializing OrbitDB...');
 
-    // Create instance-specific identity
     const identity = await createIdentity(this.adminKey, this.directories.keystore);
-
     const options = {
       directory: this.directories.orbitdb,
       identity
@@ -229,23 +245,15 @@ class OrbitDBInitializer {
 
     logger.info('OrbitDB options:', options);
     this.orbitdb = await OrbitDB.createInstance(this.ipfs, options);
-
     logger.info('Created OrbitDB instance with identity:', this.orbitdb.identity.id);
 
-    const dbOptions = {
-      accessController: {
-        type: 'ipfs',
-        write: [this.orbitdb.identity.id]
-      }
-    };
-
-    if (existingDbAddress) {
+    if (this.databaseAddress) {
       logger.info('Opening existing database...');
-      this.eventlog = await this.orbitdb.eventlog(existingDbAddress, dbOptions);
-      logger.info(`Opened existing database: ${existingDbAddress}`);
+      this.eventlog = await this.orbitdb.eventlog(this.databaseAddress, this.options);
+      logger.info(`Opened existing database: ${this.databaseAddress}`);
     } else {
       logger.info('Creating new database...');
-      this.eventlog = await this.orbitdb.eventlog('eventlog', dbOptions);
+      this.eventlog = await this.orbitdb.eventlog('eventlog', this.options);
       logger.info(`Created new database: ${this.eventlog.address.toString()}`);
     }
 
@@ -260,32 +268,5 @@ class OrbitDBInitializer {
     logger.info('All connections closed');
   }
 }
-// Main execution
-const main = async () => {
-  const privateKey = process.argv[2] || process.env.ADMIN_PRIVATE_KEY;
-  
-  try {
-    const initializer = new OrbitDBInitializer(privateKey);
-    const dbAddress = await initializer.initialize();
-    
-    logger.info('\nInitialization Summary:');
-    logger.info('-----------------------');
-    logger.info(`Database Address: ${dbAddress}`);
-    logger.info(`Admin Address: ${initializer.keyring.pairs[0].address}`);
-    
-    await initializer.close();
-  } catch (error) {
-    logger.error('Initialization failed:', error);
-    process.exit(1);
-  }
-};
 
-// ESM entry point
-if (import.meta.url.startsWith('file:')) {
-  const modulePath = fileURLToPath(import.meta.url);
-  if (process.argv[1] === modulePath) {
-    main().catch(console.error);
-  }
-}
 
-export default OrbitDBInitializer;
