@@ -11,8 +11,8 @@ import winston from 'winston';
 import dotenv from 'dotenv';
 import { createRequire } from 'module';
 import Identities from "orbit-db-identity-provider";
-import {OwnerDatabaseInitializer} from "./init_ipfs.js";
 import {createIdentity, PolkadotIdentityProvider} from "./identity.js";
+import { OrbitDBAccessController } from '@orbitdb/core'
 
 const require = createRequire(import.meta.url);
 const Keystore = require('orbit-db-keystore');
@@ -134,23 +134,31 @@ const main = async () => {
         const orbitdb = await OrbitDB.createInstance(ipfs, dbOptions);
 
         // TODO: call api here to query validator addresses, and give them write access to receipt event log
-        const accessController = {
-            type: 'ipfs',
+
+        const accessController = OrbitDBAccessController({
             write: [
-                orbitdb.identity.id,
+                orbitdb.identity.id
             ]
-        }
+        })
 
         let eventlog = null
         let databaseAddress = process.env.DATA_BASE_ADDRESS || null
         if (databaseAddress) {
-            eventlog = await orbitdb.eventlog(databaseAddress, {accessController});
+            eventlog = await orbitdb.eventlog(databaseAddress, {
+                AccessController: accessController
+            });
+
         } else {
-            eventlog = await orbitdb.eventlog('receipts', {accessController});
+            eventlog = await orbitdb.eventlog('receipts2', {
+                AccessController: accessController
+            });
             databaseAddress = eventlog.address.toString()
         }
 
+        const isGranted = await eventlog.access.grant('write', identity.id)
+
         await eventlog.load();
+
         logger.info("Database address: ", databaseAddress)
 
         process.on('SIGINT', () => shutdown(ipfs, orbitdb, eventlog));

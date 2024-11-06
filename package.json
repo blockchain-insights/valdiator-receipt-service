@@ -14,6 +14,7 @@
     "dependencies": {
         "@grpc/grpc-js": "^1.9.14",
         "@grpc/proto-loader": "^0.7.10",
+        "@orbitdb/core": "^2.4.3",
         "@polkadot/api": "^10.11.2",
         "@polkadot/keyring": "^12.6.2",
         "@polkadot/util": "^12.6.2",
