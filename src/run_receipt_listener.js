@@ -5,6 +5,11 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
+import Identities from "orbit-db-identity-provider";
+import {createIdentity, PolkadotIdentityProvider} from "./identity.js";
+import {cryptoWaitReady, mnemonicGenerate, mnemonicToMiniSecret} from "@polkadot/util-crypto";
+import {u8aToHex} from "@polkadot/util";
+import {Keyring} from "@polkadot/keyring";
 
 dotenv.config();
 
@@ -34,6 +39,8 @@ const logger = winston.createLogger({
         })
     ]
 });
+
+Identities.addIdentityProvider(PolkadotIdentityProvider)
 
 const shutdown = async (ipfs, orbitdb, eventlog) => {
     logger.info('Shutting down...');
@@ -67,34 +74,38 @@ const main = async () => {
     let eventlog = null;
 
     try {
-        // Check for required environment variables
-        const databaseAddress = process.env.DATA_BASE_ADDRESS;
+        await cryptoWaitReady()
+
+        const databaseAddress = "/orbitdb/zdpuApW3eKKUNzyeShfBSaH8CnyMRJaVJoyf1g17Xb8V12pxp/receipts4";
         if (!databaseAddress) {
             logger.error('DATA_BASE_ADDRESS environment variable is required');
             return;
         }
 
-        // Generate unique directory names based on ports to allow multiple instances
-        const ports = {
-            swarm: 4003,
-            api: 5003,
-            gateway: 9091
-        };
+        // === Private Key ===
+        const mnemonic = mnemonicGenerate();
+        const seed = mnemonicToMiniSecret(mnemonic);
+        const keyring = new Keyring({ type: 'sr25519' });
+        const keyPair = keyring.addFromSeed(seed);
 
-        // Setup storage directories
-        const baseDir = path.join(process.cwd(), 'data', `listener_${ports.swarm}`);
+        // === Setup storage directories
+        const baseDir = path.join(process.cwd(), 'data', keyPair.address);
         const directories = {
             ipfs: path.join(baseDir, 'ipfs'),
-            orbitdb: path.join(baseDir, 'orbitdb')
+            orbitdb: path.join(baseDir, 'orbitdb'),
+            keystore: path.join(baseDir, 'keystore')
         };
-
-        // Create directories
         for (const dir of Object.values(directories)) {
             await fs.mkdir(dir, { recursive: true });
         }
 
-        // Initialize IPFS with custom ports
-        logger.info('Starting IPFS node...', { ports });
+        // === IPFS
+        const ports = {
+            swarm: 4022,
+            api: 5022,
+            gateway: 9910
+        }
+
         ipfs = await IPFS.create({
             repo: directories.ipfs,
             config: {
@@ -117,29 +128,24 @@ const main = async () => {
         });
 
         const id = await ipfs.id();
-        logger.info('IPFS node started', { peerId: id.id });
 
-        // Initialize OrbitDB
-        logger.info('Initializing OrbitDB...');
-        orbitdb = await OrbitDB.createInstance(ipfs, {
-            directory: directories.orbitdb
-        });
+        // == Initialize OrbitDB ===
+        const identity = await createIdentity(keyPair, directories.keystore);
+        const options = {
+            directory: directories.orbitdb,
+            identity,
+        };
 
-        // Connect to the existing database
-        logger.info('Connecting to database...', { address: databaseAddress });
+        orbitdb = await OrbitDB.createInstance(ipfs, options);
         eventlog = await orbitdb.open(databaseAddress);
-
-        // Load the database
         await eventlog.load();
 
-        // Get and log existing entries
         const entries = await eventlog.iterator({ limit: -1 }).collect();
         logger.info('Current database entries:', {
             count: entries.length,
             latest: entries.slice(-5) // Show last 5 entries
         });
 
-        // Subscribe to new database updates
         eventlog.events.on('replicated', (address) => {
             logger.info('Database replicated', { address });
         });

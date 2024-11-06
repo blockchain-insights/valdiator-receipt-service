@@ -9,13 +9,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import winston from 'winston';
 import dotenv from 'dotenv';
-import { createRequire } from 'module';
+//import { createRequire } from 'module';
 import Identities from "orbit-db-identity-provider";
-import {createIdentity, PolkadotIdentityProvider} from "./identity.js";
-import { OrbitDBAccessController } from '@orbitdb/core'
+import {createIdentity,  PolkadotIdentityProvider} from "./identity.js";
+import {OrbitDBAccessController} from "@orbitdb/core";
 
-const require = createRequire(import.meta.url);
-const Keystore = require('orbit-db-keystore');
+//const require = createRequire(import.meta.url);
+//const Keystore = require('orbit-db-keystore');
 
 dotenv.config();
 
@@ -123,43 +123,40 @@ const main = async () => {
 
         // == Initialize OrbitDB ===
         const identity = await createIdentity(keyPair, directories.keystore);
+
         const options = {
-            directory: directories.orbitdb,
-            identity
-        };
-        const dbOptions = {
             directory: directories.orbitdb,
             identity,
         };
-        const orbitdb = await OrbitDB.createInstance(ipfs, dbOptions);
-
-        // TODO: call api here to query validator addresses, and give them write access to receipt event log
-
-        const accessController = OrbitDBAccessController({
-            write: [
-                orbitdb.identity.id
-            ]
-        })
+        const orbitdb = await OrbitDB.createInstance(ipfs, options);
+        const dbOptions = {
+                AccessController: OrbitDBAccessController({
+                    write: [orbitdb.identity.id]
+                })
+        };
 
         let eventlog = null
         let databaseAddress = process.env.DATA_BASE_ADDRESS || null
         if (databaseAddress) {
-            eventlog = await orbitdb.eventlog(databaseAddress, {
-                AccessController: accessController
-            });
-
+            eventlog = await orbitdb.eventlog(databaseAddress, dbOptions);
         } else {
-            eventlog = await orbitdb.eventlog('receipts2', {
-                AccessController: accessController
-            });
-            databaseAddress = eventlog.address.toString()
+            const dbAddressPath = path.join(process.cwd(), '.db-address');
+            try {
+                await fs.access(dbAddressPath);
+                databaseAddress = await fs.readFile(dbAddressPath, 'utf8');
+                eventlog = await orbitdb.eventlog(databaseAddress, dbOptions);
+            } catch (error) {
+                eventlog = await orbitdb.eventlog('receipts4', dbOptions);
+                databaseAddress = eventlog.address.toString();
+                await fs.writeFile(dbAddressPath, databaseAddress);
+            }
         }
 
         const isGranted = await eventlog.access.grant('write', identity.id)
 
         await eventlog.load();
 
-        logger.info("Database address: ", databaseAddress)
+        logger.info(`Database address: ${databaseAddress}`)
 
         process.on('SIGINT', () => shutdown(ipfs, orbitdb, eventlog));
         process.on('SIGTERM', () => shutdown(ipfs, orbitdb, eventlog));
