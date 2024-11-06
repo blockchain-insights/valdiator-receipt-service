@@ -10,6 +10,7 @@ import {createIdentity, PolkadotIdentityProvider} from "./identity.js";
 import {cryptoWaitReady, mnemonicGenerate, mnemonicToMiniSecret} from "@polkadot/util-crypto";
 import {u8aToHex} from "@polkadot/util";
 import {Keyring} from "@polkadot/keyring";
+import {OrbitDBAccessController} from "@orbitdb/core";
 
 dotenv.config();
 
@@ -41,7 +42,7 @@ const logger = winston.createLogger({
 });
 
 Identities.addIdentityProvider(PolkadotIdentityProvider)
-
+process.setMaxListeners(1);
 const shutdown = async (ipfs, orbitdb, eventlog) => {
     logger.info('Shutting down...');
     try {
@@ -101,9 +102,9 @@ const main = async () => {
 
         // === IPFS
         const ports = {
-            swarm: 4022,
-            api: 5022,
-            gateway: 9910
+            swarm: 4033,
+            api: 5033,
+            gateway: 9711
         }
 
         ipfs = await IPFS.create({
@@ -137,36 +138,40 @@ const main = async () => {
         };
 
         orbitdb = await OrbitDB.createInstance(ipfs, options);
-        eventlog = await orbitdb.open(databaseAddress);
+        eventlog = await orbitdb.open(databaseAddress, {
+            AccessController: OrbitDBAccessController({
+                write: ["5Cm5QWqx83UpYwFNdjdkoRiCJb7mR5gujfBPQgvpTfaaqTpt", orbitdb.identity.id],
+            })
+        });
         await eventlog.load();
+        /*
+                const entries = await eventlog.iterator({ limit: -1 }).collect();
+                logger.info('Current database entries:', {
+                    count: entries.length,
+                    latest: entries.slice(-5) // Show last 5 entries
+                });
 
-        const entries = await eventlog.iterator({ limit: -1 }).collect();
-        logger.info('Current database entries:', {
-            count: entries.length,
-            latest: entries.slice(-5) // Show last 5 entries
-        });
+                eventlog.events.on('replicated', (address) => {
+                    logger.info('Database replicated', { address });
+                });
 
-        eventlog.events.on('replicated', (address) => {
-            logger.info('Database replicated', { address });
-        });
+                eventlog.events.on('replicate.progress', (address, hash, entry, progress, total) => {
+                    logger.info('Replication progress', {
+                        address,
+                        hash,
+                        entry: entry.payload.value,
+                        progress,
+                        total
+                    });
+                });
 
-        eventlog.events.on('replicate.progress', (address, hash, entry, progress, total) => {
-            logger.info('Replication progress', {
-                address,
-                hash,
-                entry: entry.payload.value,
-                progress,
-                total
-            });
-        });
-
-        eventlog.events.on('write', (address, entry, heads) => {
-            logger.info('New entry written', {
-                address,
-                hash: entry.hash,
-                data: entry.payload.value
-            });
-        });
+                eventlog.events.on('write', (address, entry, heads) => {
+                    logger.info('New entry written', {
+                        address,
+                        hash: entry.hash,
+                        data: entry.payload.value
+                    });
+                });*/
 
         // Set up signal handlers for graceful shutdown
         process.on('SIGINT', () => shutdown(ipfs, orbitdb, eventlog));
