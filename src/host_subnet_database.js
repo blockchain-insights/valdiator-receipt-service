@@ -40,6 +40,32 @@ export const logger = winston.createLogger({
 
 Identities.addIdentityProvider(PolkadotIdentityProvider)
 
+const shutdown = async (ipfs, orbitdb, eventlog) => {
+    logger.info('Shutting down...');
+    try {
+        if (eventlog) {
+            logger.info('Closing eventlog database...');
+            await eventlog.close();
+        }
+
+        if (orbitdb) {
+            logger.info('Closing OrbitDB instance...');
+            await orbitdb.disconnect();
+        }
+
+        if (ipfs) {
+            logger.info('Stopping IPFS node...');
+            await ipfs.stop();
+        }
+
+        logger.info('Shutdown complete');
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+    }
+};
+
 const main = async () => {
     try {
         await cryptoWaitReady()
@@ -116,16 +142,38 @@ const main = async () => {
         }
 
         let eventlog = null
-        const databaseAddress = process.env.DATA_BASE_ADDRESS || null
+        let databaseAddress = process.env.DATA_BASE_ADDRESS || null
         if (databaseAddress) {
             eventlog = await orbitdb.eventlog(databaseAddress, {accessController});
         } else {
             eventlog = await orbitdb.eventlog('receipts', {accessController});
+            databaseAddress = eventlog.address.toString()
         }
 
         await eventlog.load();
-        logger.info("Done")
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        logger.info("Database address: ", databaseAddress)
+
+        process.on('SIGINT', () => shutdown(ipfs, orbitdb, eventlog));
+        process.on('SIGTERM', () => shutdown(ipfs, orbitdb, eventlog));
+
+        logger.info('System is running. Press Ctrl+C to shut down.');
+
+        setInterval(async () => {
+            try {
+                const entry = {
+                    timestamp: Date.now(),
+                    message: "Test message",
+                    data: Math.random()
+                };
+
+                const hash = await eventlog.add(entry);
+                logger.info('Written new entry:', { hash, entry });
+            } catch (error) {
+                logger.error('Error writing entry:', error);
+            }
+        }, 5000);
+
+        await new Promise(() => {});
 
 
     } catch (error) {
